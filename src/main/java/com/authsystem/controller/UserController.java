@@ -1,11 +1,12 @@
 package com.authsystem.controller;
 
+import com.authsystem.dto.LoginRequest;
+import com.authsystem.dto.RegisterRequest;
+import com.authsystem.service.UserService;
+
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
-
-import com.authsystem.dto.RegisterRequest;
-import com.authsystem.service.UserService;
 
 @RestController
 public class UserController {
@@ -18,9 +19,12 @@ public class UserController {
 
     @PostMapping("/register")
     public String register(@RequestBody RegisterRequest request) {
-
         userService.registerUser(request);
-
         return "User registered successfully!";
+    }
+
+    @PostMapping("/login")
+    public String login(@RequestBody LoginRequest request) {
+        return userService.loginUser(request);
     }
 }
