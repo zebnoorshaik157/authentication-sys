@@ -1,7 +1,5 @@
 package com.authsystem.security;
 
-import com.authsystem.security.filter.JwtAuthenticationFilter;
-
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
@@ -12,6 +10,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+
+import com.authsystem.security.filter.JwtAuthenticationFilter;
 
 @Configuration
 public class SecurityConfig {
@@ -30,6 +30,10 @@ public class SecurityConfig {
         http
             .csrf(csrf -> csrf.disable())
 
+            // Disable Spring Security's default logout handler.
+            // Our custom /logout controller revokes refresh tokens.
+            .logout(logout -> logout.disable())
+
             .sessionManagement(session -> session
                 .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
             )
@@ -44,6 +48,8 @@ public class SecurityConfig {
                 .requestMatchers(
                     "/register",
                     "/login",
+                    "/refresh",
+                    "/logout",
                     "/error"
                 ).permitAll()
                 .anyRequest().authenticated()
