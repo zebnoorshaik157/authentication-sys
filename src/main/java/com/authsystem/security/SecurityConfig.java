@@ -1,3 +1,4 @@
+
 package com.authsystem.security;
 
 import org.springframework.context.annotation.Bean;
@@ -30,8 +31,7 @@ public class SecurityConfig {
         http
             .csrf(csrf -> csrf.disable())
 
-            // Disable Spring Security's default logout handler.
-            // Our custom /logout controller revokes refresh tokens.
+            // Our custom controller handles refresh-token revocation.
             .logout(logout -> logout.disable())
 
             .sessionManagement(session -> session
@@ -52,6 +52,11 @@ public class SecurityConfig {
                     "/logout",
                     "/error"
                 ).permitAll()
+
+                // Only users with the ADMIN role can access /admin/**.
+                .requestMatchers("/admin/**").hasRole("ADMIN")
+
+                // All other protected endpoints require authentication.
                 .anyRequest().authenticated()
             )
 

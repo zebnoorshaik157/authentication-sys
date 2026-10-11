@@ -1,13 +1,18 @@
+
 package com.authsystem.security.filter;
 
 import java.io.IOException;
-import java.util.Collections;
+import java.util.List;
 
+import org.springframework.http.HttpHeaders;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
+import com.authsystem.entity.User;
+import com.authsystem.repository.UserRepository;
 import com.authsystem.security.jwt.JwtService;
 
 import io.jsonwebtoken.Claims;
@@ -20,9 +25,13 @@ import jakarta.servlet.http.HttpServletResponse;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtService jwtService;
+    private final UserRepository userRepository;
 
-    public JwtAuthenticationFilter(JwtService jwtService) {
+    public JwtAuthenticationFilter(
+            JwtService jwtService,
+            UserRepository userRepository) {
         this.jwtService = jwtService;
+        this.userRepository = userRepository;
     }
 
     @Override
@@ -32,6 +41,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         return path.equals("/register")
                 || path.equals("/login")
                 || path.equals("/refresh")
+                || path.equals("/logout")
                 || path.equals("/error");
     }
 
@@ -42,7 +52,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             FilterChain filterChain)
             throws ServletException, IOException {
 
-        String authHeader = request.getHeader("Authorization");
+        String authHeader = request.getHeader(HttpHeaders.AUTHORIZATION);
 
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
             filterChain.doFilter(request, response);
@@ -57,16 +67,35 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             String tokenType = claims.get("tokenType", String.class);
 
             if (!"access".equals(tokenType)) {
-                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                response.sendError(
+                        HttpServletResponse.SC_UNAUTHORIZED,
+                        "Invalid access token");
                 return;
             }
 
             String email = claims.getSubject();
 
             if (SecurityContextHolder.getContext().getAuthentication() == null) {
+
+                User user = userRepository.findByEmail(email)
+                        .orElse(null);
+
+                if (user == null || user.getRole() == null) {
+                    response.sendError(
+                            HttpServletResponse.SC_UNAUTHORIZED,
+                            "User not found or role not assigned");
+                    return;
+                }
+
+                SimpleGrantedAuthority authority =
+                        new SimpleGrantedAuthority(
+                                "ROLE_" + user.getRole());
+
                 UsernamePasswordAuthenticationToken authentication =
                         new UsernamePasswordAuthenticationToken(
-                                email, null, Collections.emptyList());
+                                email,
+                                null,
+                                List.of(authority));
 
                 SecurityContextHolder.getContext()
                         .setAuthentication(authentication);
@@ -74,7 +103,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
         } catch (Exception e) {
             SecurityContextHolder.clearContext();
-            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+
+            if (!response.isCommitted()) {
+                response.sendError(
+                        HttpServletResponse.SC_UNAUTHORIZED,
+                        "Invalid or expired access token");
+            }
             return;
         }
 
