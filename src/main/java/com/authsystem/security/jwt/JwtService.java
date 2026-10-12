@@ -1,4 +1,8 @@
+
 package com.authsystem.security.jwt;
+
+import java.util.Date;
+import java.util.UUID;
 
 import javax.crypto.SecretKey;
 
@@ -9,9 +13,6 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
-
-import java.util.Date;
-import java.util.UUID;
 
 @Service
 public class JwtService {
@@ -47,6 +48,22 @@ public class JwtService {
                 .id(UUID.randomUUID().toString())
                 .subject(email)
                 .claim("tokenType", "refresh")
+                .issuedAt(new Date())
+                .expiration(new Date(
+                        System.currentTimeMillis() + expirationTime
+                ))
+                .signWith(getSigningKey(), Jwts.SIG.HS512)
+                .compact();
+    }
+
+    // Generate Password Reset Token (10 minutes)
+    public String generatePasswordResetToken(String email) {
+        long expirationTime = 10 * 60 * 1000;
+
+        return Jwts.builder()
+                .id(UUID.randomUUID().toString())
+                .subject(email)
+                .claim("tokenType", "password_reset")
                 .issuedAt(new Date())
                 .expiration(new Date(
                         System.currentTimeMillis() + expirationTime

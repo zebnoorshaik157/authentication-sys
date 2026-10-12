@@ -1,4 +1,5 @@
 
+
 package com.authsystem.security;
 
 import org.springframework.context.annotation.Bean;
@@ -45,18 +46,22 @@ public class SecurityConfig {
             )
 
             .authorizeHttpRequests(auth -> auth
+                // Public authentication endpoints.
                 .requestMatchers(
                     "/register",
                     "/login",
                     "/refresh",
                     "/logout",
-                    "/error"
+                    "/error",
+                    "/api/auth/forgot-password",
+                    "/api/auth/verify-otp",
+                    "/api/auth/reset-password"
                 ).permitAll()
 
-                // Only users with the ADMIN role can access /admin/**.
+                // Only ADMIN users can access /admin/**.
                 .requestMatchers("/admin/**").hasRole("ADMIN")
 
-                // All other protected endpoints require authentication.
+                // All remaining endpoints require authentication.
                 .anyRequest().authenticated()
             )
 
