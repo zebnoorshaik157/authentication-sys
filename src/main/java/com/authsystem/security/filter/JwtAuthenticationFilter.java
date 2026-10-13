@@ -18,6 +18,7 @@ import com.authsystem.security.jwt.JwtService;
 import io.jsonwebtoken.Claims;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
+import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -52,14 +53,33 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             FilterChain filterChain)
             throws ServletException, IOException {
 
-        String authHeader = request.getHeader(HttpHeaders.AUTHORIZATION);
+        String token = null;
 
-        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+        // First, check the Authorization header.
+        String authHeader =
+                request.getHeader(HttpHeaders.AUTHORIZATION);
+
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            token = authHeader.substring(7);
+        } else {
+            // If there is no Bearer token, check the accessToken cookie.
+            Cookie[] cookies = request.getCookies();
+
+            if (cookies != null) {
+                for (Cookie cookie : cookies) {
+                    if ("accessToken".equals(cookie.getName())) {
+                        token = cookie.getValue();
+                        break;
+                    }
+                }
+            }
+        }
+
+        // No token: let Spring Security decide whether authentication is required.
+        if (token == null || token.isBlank()) {
             filterChain.doFilter(request, response);
             return;
         }
-
-        String token = authHeader.substring(7);
 
         try {
             Claims claims = jwtService.extractAllClaims(token);
