@@ -1,4 +1,5 @@
 
+
 package com.authsystem.security;
 
 import java.util.List;
@@ -47,8 +48,6 @@ public class SecurityConfig {
                 .ignoringRequestMatchers(
                     "/register",
                     "/login",
-                    "/refresh",
-                    "/logout",
                     "/api/auth/forgot-password",
                     "/api/auth/verify-otp",
                     "/api/auth/reset-password"
@@ -75,6 +74,7 @@ public class SecurityConfig {
                     "/login",
                     "/refresh",
                     "/logout",
+                    "/csrf",
                     "/error",
                     "/api/auth/forgot-password",
                     "/api/auth/verify-otp",

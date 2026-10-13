@@ -12,8 +12,10 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.authsystem.entity.PasswordResetOtp;
+import com.authsystem.entity.PasswordResetToken;
 import com.authsystem.entity.User;
 import com.authsystem.repository.PasswordResetOtpRepository;
+import com.authsystem.repository.PasswordResetTokenRepository;
 import com.authsystem.repository.UserRepository;
 import com.authsystem.security.jwt.JwtService;
 
@@ -25,6 +27,7 @@ public class PasswordResetService {
     private static final int OTP_EXPIRY_MINUTES = 5;
 
     private final PasswordResetOtpRepository otpRepository;
+    private final PasswordResetTokenRepository resetTokenRepository;
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final EmailService emailService;
@@ -34,12 +37,14 @@ public class PasswordResetService {
 
     public PasswordResetService(
             PasswordResetOtpRepository otpRepository,
+            PasswordResetTokenRepository resetTokenRepository,
             UserRepository userRepository,
             PasswordEncoder passwordEncoder,
             EmailService emailService,
             JwtService jwtService) {
 
         this.otpRepository = otpRepository;
+        this.resetTokenRepository = resetTokenRepository;
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.emailService = emailService;
@@ -84,7 +89,7 @@ public class PasswordResetService {
                         + "\nIf you did not request this, ignore this email.");
     }
 
-    // Step 2: Verify OTP and return a reset token
+    // Step 2: Verify OTP and issue a reset token
     @Transactional
     public String verifyOtp(String email, String otp) {
 
@@ -104,7 +109,19 @@ public class PasswordResetService {
         resetOtp.setUsed(true);
         otpRepository.save(resetOtp);
 
-        return jwtService.generatePasswordResetToken(user.getEmail());
+        String resetToken =
+                jwtService.generatePasswordResetToken(user.getEmail());
+
+        Claims claims = jwtService.extractAllClaims(resetToken);
+
+        PasswordResetToken tokenRecord = new PasswordResetToken();
+        tokenRecord.setTokenId(claims.getId());
+        tokenRecord.setExpiresAt(claims.getExpiration().toInstant());
+        tokenRecord.setUsed(false);
+
+        resetTokenRepository.save(tokenRecord);
+
+        return resetToken;
     }
 
     // Step 3: Validate reset token and save the new password
@@ -119,6 +136,21 @@ public class PasswordResetService {
                 throw invalidResetToken();
             }
 
+            String tokenId = claims.getId();
+
+            if (tokenId == null) {
+                throw invalidResetToken();
+            }
+
+            PasswordResetToken tokenRecord = resetTokenRepository
+                    .findByTokenId(tokenId)
+                    .orElseThrow(() -> invalidResetToken());
+
+            if (tokenRecord.isUsed()
+                    || tokenRecord.getExpiresAt().isBefore(Instant.now())) {
+                throw invalidResetToken();
+            }
+
             String email = claims.getSubject();
 
             User user = userRepository.findByEmail(email)
@@ -126,6 +158,9 @@ public class PasswordResetService {
 
             user.setPassword(passwordEncoder.encode(newPassword));
             userRepository.save(user);
+
+            tokenRecord.setUsed(true);
+            resetTokenRepository.save(tokenRecord);
 
         } catch (ResponseStatusException ex) {
             throw ex;

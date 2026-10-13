@@ -1,4 +1,5 @@
 
+
 package com.authsystem.security.filter;
 
 import java.io.IOException;
@@ -43,7 +44,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 || path.equals("/login")
                 || path.equals("/refresh")
                 || path.equals("/logout")
-                || path.equals("/error");
+                || path.equals("/error")
+                || path.equals("/api/auth/forgot-password")
+                || path.equals("/api/auth/verify-otp")
+                || path.equals("/api/auth/reset-password");
     }
 
     @Override
