@@ -5,6 +5,10 @@ import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -24,6 +28,9 @@ import io.jsonwebtoken.Claims;
 @Service
 public class PasswordResetService {
 
+    private static final Logger log =
+            LoggerFactory.getLogger(PasswordResetService.class);
+
     private static final int OTP_EXPIRY_MINUTES = 5;
 
     private final PasswordResetOtpRepository otpRepository;
@@ -32,6 +39,7 @@ public class PasswordResetService {
     private final PasswordEncoder passwordEncoder;
     private final EmailService emailService;
     private final JwtService jwtService;
+    private final Environment environment;
 
     private final SecureRandom secureRandom = new SecureRandom();
 
@@ -41,7 +49,8 @@ public class PasswordResetService {
             UserRepository userRepository,
             PasswordEncoder passwordEncoder,
             EmailService emailService,
-            JwtService jwtService) {
+            JwtService jwtService,
+            Environment environment) {
 
         this.otpRepository = otpRepository;
         this.resetTokenRepository = resetTokenRepository;
@@ -49,6 +58,7 @@ public class PasswordResetService {
         this.passwordEncoder = passwordEncoder;
         this.emailService = emailService;
         this.jwtService = jwtService;
+        this.environment = environment;
     }
 
     // Step 1: Generate and email an OTP
@@ -81,6 +91,14 @@ public class PasswordResetService {
 
         otpRepository.save(resetOtp);
 
+        // Development-only testing; never expose OTPs in production
+        if (environment.acceptsProfiles(Profiles.of("dev"))) {
+            log.warn(
+                    "DEV ONLY: Password reset OTP for {} is {}",
+                    user.getEmail(),
+                    otp);
+        }
+
         emailService.sendEmail(
                 user.getEmail(),
                 "Password Reset OTP",
@@ -94,11 +112,11 @@ public class PasswordResetService {
     public String verifyOtp(String email, String otp) {
 
         User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> invalidOtp());
+                .orElseThrow(this::invalidOtp);
 
         PasswordResetOtp resetOtp = otpRepository
                 .findTopByUserAndUsedFalseOrderByIdDesc(user)
-                .orElseThrow(() -> invalidOtp());
+                .orElseThrow(this::invalidOtp);
 
         if (resetOtp.getExpiresAt().isBefore(Instant.now())
                 || !passwordEncoder.matches(
@@ -116,7 +134,8 @@ public class PasswordResetService {
 
         PasswordResetToken tokenRecord = new PasswordResetToken();
         tokenRecord.setTokenId(claims.getId());
-        tokenRecord.setExpiresAt(claims.getExpiration().toInstant());
+        tokenRecord.setExpiresAt(
+                claims.getExpiration().toInstant());
         tokenRecord.setUsed(false);
 
         resetTokenRepository.save(tokenRecord);
@@ -126,10 +145,12 @@ public class PasswordResetService {
 
     // Step 3: Validate reset token and save the new password
     @Transactional
-    public void resetPassword(String resetToken, String newPassword) {
+    public void resetPassword(
+            String resetToken, String newPassword) {
 
         try {
-            Claims claims = jwtService.extractAllClaims(resetToken);
+            Claims claims =
+                    jwtService.extractAllClaims(resetToken);
 
             if (!"password_reset".equals(
                     claims.get("tokenType", String.class))) {
@@ -144,19 +165,21 @@ public class PasswordResetService {
 
             PasswordResetToken tokenRecord = resetTokenRepository
                     .findByTokenId(tokenId)
-                    .orElseThrow(() -> invalidResetToken());
+                    .orElseThrow(this::invalidResetToken);
 
             if (tokenRecord.isUsed()
-                    || tokenRecord.getExpiresAt().isBefore(Instant.now())) {
+                    || tokenRecord.getExpiresAt()
+                            .isBefore(Instant.now())) {
                 throw invalidResetToken();
             }
 
             String email = claims.getSubject();
 
             User user = userRepository.findByEmail(email)
-                    .orElseThrow(() -> invalidResetToken());
+                    .orElseThrow(this::invalidResetToken);
 
-            user.setPassword(passwordEncoder.encode(newPassword));
+            user.setPassword(
+                    passwordEncoder.encode(newPassword));
             userRepository.save(user);
 
             tokenRecord.setUsed(true);
