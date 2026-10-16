@@ -20,6 +20,7 @@ import com.authsystem.entity.PasswordResetToken;
 import com.authsystem.entity.User;
 import com.authsystem.repository.PasswordResetOtpRepository;
 import com.authsystem.repository.PasswordResetTokenRepository;
+import com.authsystem.repository.RefreshTokenRepository;
 import com.authsystem.repository.UserRepository;
 import com.authsystem.security.jwt.JwtService;
 
@@ -35,6 +36,7 @@ public class PasswordResetService {
 
     private final PasswordResetOtpRepository otpRepository;
     private final PasswordResetTokenRepository resetTokenRepository;
+    private final RefreshTokenRepository refreshTokenRepository;
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final EmailService emailService;
@@ -46,6 +48,7 @@ public class PasswordResetService {
     public PasswordResetService(
             PasswordResetOtpRepository otpRepository,
             PasswordResetTokenRepository resetTokenRepository,
+            RefreshTokenRepository refreshTokenRepository,
             UserRepository userRepository,
             PasswordEncoder passwordEncoder,
             EmailService emailService,
@@ -54,6 +57,7 @@ public class PasswordResetService {
 
         this.otpRepository = otpRepository;
         this.resetTokenRepository = resetTokenRepository;
+        this.refreshTokenRepository = refreshTokenRepository;
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.emailService = emailService;
@@ -67,7 +71,7 @@ public class PasswordResetService {
 
         User user = userRepository.findByEmail(email).orElse(null);
 
-        // Do not reveal whether the email exists
+        // Do not reveal whether the email exists.
         if (user == null) {
             return;
         }
@@ -91,7 +95,7 @@ public class PasswordResetService {
 
         otpRepository.save(resetOtp);
 
-        // Development-only testing; never expose OTPs in production
+        // Development-only logging. Never expose OTPs in production.
         if (environment.acceptsProfiles(Profiles.of("dev"))) {
             log.warn(
                     "DEV ONLY: Password reset OTP for {} is {}",
@@ -143,7 +147,8 @@ public class PasswordResetService {
         return resetToken;
     }
 
-    // Step 3: Validate reset token and save the new password
+    // Step 3: Validate reset token, change password,
+    // and revoke existing refresh tokens.
     @Transactional
     public void resetPassword(
             String resetToken, String newPassword) {
@@ -168,8 +173,8 @@ public class PasswordResetService {
                     .orElseThrow(this::invalidResetToken);
 
             if (tokenRecord.isUsed()
-                    || tokenRecord.getExpiresAt()
-                            .isBefore(Instant.now())) {
+                    || !tokenRecord.getExpiresAt()
+                            .isAfter(Instant.now())) {
                 throw invalidResetToken();
             }
 
@@ -182,6 +187,11 @@ public class PasswordResetService {
                     passwordEncoder.encode(newPassword));
             userRepository.save(user);
 
+            // Revoke every active refresh token for this user.
+            refreshTokenRepository
+                    .revokeAllActiveTokensByUserId(user.getId());
+
+            // Mark this reset token as used.
             tokenRecord.setUsed(true);
             resetTokenRepository.save(tokenRecord);
 
