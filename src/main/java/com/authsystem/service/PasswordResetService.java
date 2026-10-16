@@ -33,6 +33,8 @@ public class PasswordResetService {
             LoggerFactory.getLogger(PasswordResetService.class);
 
     private static final int OTP_EXPIRY_MINUTES = 5;
+    private static final int MAX_OTP_ATTEMPTS = 5;
+    private static final int RESEND_COOLDOWN_SECONDS = 60;
 
     private final PasswordResetOtpRepository otpRepository;
     private final PasswordResetTokenRepository resetTokenRepository;
@@ -65,20 +67,36 @@ public class PasswordResetService {
         this.environment = environment;
     }
 
-    // Step 1: Generate and email an OTP
+    // Step 1: Generate and email an OTP.
     @Transactional
     public void forgotPassword(String email) {
 
         User user = userRepository.findByEmail(email).orElse(null);
 
-        // Do not reveal whether the email exists.
+        // Keep the response generic to prevent account enumeration.
         if (user == null) {
             return;
         }
 
+        Instant now = Instant.now();
+
         List<PasswordResetOtp> oldOtps =
                 otpRepository.findByUserAndUsedFalse(user);
 
+        // Enforce resend cooldown using the latest OTP creation time.
+        Instant latestCreation = oldOtps.stream()
+                .map(PasswordResetOtp::getCreatedAt)
+                .filter(createdAt -> createdAt != null)
+                .max(Instant::compareTo)
+                .orElse(null);
+
+        if (latestCreation != null
+                && latestCreation.plusSeconds(RESEND_COOLDOWN_SECONDS)
+                        .isAfter(now)) {
+            return;
+        }
+
+        // Invalidate any previous active OTPs.
         for (PasswordResetOtp oldOtp : oldOtps) {
             oldOtp.setUsed(true);
         }
@@ -90,17 +108,17 @@ public class PasswordResetService {
         resetOtp.setUser(user);
         resetOtp.setOtpHash(passwordEncoder.encode(otp));
         resetOtp.setExpiresAt(
-                Instant.now().plusSeconds(OTP_EXPIRY_MINUTES * 60L));
+                now.plusSeconds(OTP_EXPIRY_MINUTES * 60L));
         resetOtp.setUsed(false);
+        resetOtp.setFailedAttempts(0);
 
         otpRepository.save(resetOtp);
 
-        // Development-only logging. Never expose OTPs in production.
+        // Development-only logging; never log OTPs in production.
         if (environment.acceptsProfiles(Profiles.of("dev"))) {
             log.warn(
-                    "DEV ONLY: Password reset OTP for {} is {}",
-                    user.getEmail(),
-                    otp);
+                    "DEV ONLY: Password reset OTP generated for {}",
+                    user.getEmail());
         }
 
         emailService.sendEmail(
@@ -111,8 +129,8 @@ public class PasswordResetService {
                         + "\nIf you did not request this, ignore this email.");
     }
 
-    // Step 2: Verify OTP and issue a reset token
-    @Transactional
+    // Step 2: Verify OTP and issue a reset token.
+    @Transactional(noRollbackFor = ResponseStatusException.class)
     public String verifyOtp(String email, String otp) {
 
         User user = userRepository.findByEmail(email)
@@ -122,9 +140,31 @@ public class PasswordResetService {
                 .findTopByUserAndUsedFalseOrderByIdDesc(user)
                 .orElseThrow(this::invalidOtp);
 
-        if (resetOtp.getExpiresAt().isBefore(Instant.now())
-                || !passwordEncoder.matches(
-                        otp, resetOtp.getOtpHash())) {
+        Instant now = Instant.now();
+
+        if (resetOtp.isUsed()
+                || !resetOtp.getExpiresAt().isAfter(now)) {
+            resetOtp.setUsed(true);
+            otpRepository.save(resetOtp);
+            throw invalidOtp();
+        }
+
+        if (resetOtp.getFailedAttempts() >= MAX_OTP_ATTEMPTS) {
+            resetOtp.setUsed(true);
+            otpRepository.save(resetOtp);
+            throw invalidOtp();
+        }
+
+        if (!passwordEncoder.matches(otp, resetOtp.getOtpHash())) {
+
+            int attempts = resetOtp.getFailedAttempts() + 1;
+            resetOtp.setFailedAttempts(attempts);
+
+            if (attempts >= MAX_OTP_ATTEMPTS) {
+                resetOtp.setUsed(true);
+            }
+
+            otpRepository.saveAndFlush(resetOtp);
             throw invalidOtp();
         }
 
@@ -147,8 +187,7 @@ public class PasswordResetService {
         return resetToken;
     }
 
-    // Step 3: Validate reset token, change password,
-    // and revoke existing refresh tokens.
+    // Step 3: Change password and revoke active refresh tokens.
     @Transactional
     public void resetPassword(
             String resetToken, String newPassword) {
@@ -187,11 +226,11 @@ public class PasswordResetService {
                     passwordEncoder.encode(newPassword));
             userRepository.save(user);
 
-            // Revoke every active refresh token for this user.
+            // Revoke all active refresh tokens for this user.
             refreshTokenRepository
                     .revokeAllActiveTokensByUserId(user.getId());
 
-            // Mark this reset token as used.
+            // Prevent reuse of the reset token.
             tokenRecord.setUsed(true);
             resetTokenRepository.save(tokenRecord);
 

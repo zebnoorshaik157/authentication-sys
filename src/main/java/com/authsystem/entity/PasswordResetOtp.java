@@ -11,6 +11,7 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
+import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
 
 @Entity
@@ -34,7 +35,20 @@ public class PasswordResetOtp {
     @Column(nullable = false)
     private boolean used = false;
 
+    @Column(nullable = false)
+    private int failedAttempts = 0;
+
+    @Column(nullable = false, updatable = false)
+    private Instant createdAt;
+
     public PasswordResetOtp() {
+    }
+
+    @PrePersist
+    protected void onCreate() {
+        if (createdAt == null) {
+            createdAt = Instant.now();
+        }
     }
 
     public Long getId() {
@@ -57,6 +71,14 @@ public class PasswordResetOtp {
         return used;
     }
 
+    public int getFailedAttempts() {
+        return failedAttempts;
+    }
+
+    public Instant getCreatedAt() {
+        return createdAt;
+    }
+
     public void setId(Long id) {
         this.id = id;
     }
@@ -75,5 +97,13 @@ public class PasswordResetOtp {
 
     public void setUsed(boolean used) {
         this.used = used;
+    }
+
+    public void setFailedAttempts(int failedAttempts) {
+        this.failedAttempts = failedAttempts;
+    }
+
+    public void setCreatedAt(Instant createdAt) {
+        this.createdAt = createdAt;
     }
 }
