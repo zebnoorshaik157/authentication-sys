@@ -1,5 +1,0 @@
-$kind: http-request
-name: 02-Reuse old token
-url: ""
-method: GET
-order: 1000
