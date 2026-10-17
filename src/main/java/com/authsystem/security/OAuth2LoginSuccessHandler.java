@@ -1,9 +1,11 @@
+
 package com.authsystem.security;
 
 import java.io.IOException;
 
 import org.springframework.http.HttpHeaders;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.security.web.authentication.AuthenticationSuccessHandler;
 import org.springframework.stereotype.Component;
@@ -25,6 +27,7 @@ public class OAuth2LoginSuccessHandler
     public OAuth2LoginSuccessHandler(
             UserService userService,
             CookieService cookieService) {
+
         this.userService = userService;
         this.cookieService = cookieService;
     }
@@ -36,38 +39,60 @@ public class OAuth2LoginSuccessHandler
             Authentication authentication)
             throws IOException, ServletException {
 
-        OAuth2User oauthUser =
-                (OAuth2User) authentication.getPrincipal();
+        if (!(authentication instanceof OAuth2AuthenticationToken oauthToken)) {
+            response.sendError(
+                    HttpServletResponse.SC_UNAUTHORIZED,
+                    "Invalid OAuth2 authentication");
+            return;
+        }
 
-        String registrationId = request.getRequestURI()
-                .contains("/github")
-                ? "github"
-                : "google";
+        OAuth2User oauthUser =
+                (OAuth2User) oauthToken.getPrincipal();
+
+        String registrationId =
+                oauthToken.getAuthorizedClientRegistrationId();
 
         String email = oauthUser.getAttribute("email");
         String name = oauthUser.getAttribute("name");
 
+        // Log only safe diagnostic information.
+        System.out.println("OAuth provider: " + registrationId);
+        System.out.println(
+                "OAuth email found: "
+                        + (email != null && !email.isBlank()));
+
+        // Google must provide a verified email.
         if ("google".equals(registrationId)) {
             Boolean emailVerified =
                     oauthUser.getAttribute("email_verified");
 
             if (email == null || email.isBlank()
                     || !Boolean.TRUE.equals(emailVerified)) {
+
                 response.sendError(
                         HttpServletResponse.SC_UNAUTHORIZED,
                         "Google account email is missing or not verified");
                 return;
             }
-        } else {
-            // GitHub may not return an email in its profile.
-            // Do not create an account without a verified email.
-            if (email == null || email.isBlank()) {
-                response.sendError(
-                        HttpServletResponse.SC_UNAUTHORIZED,
-                        "GitHub did not provide an email. "
-                                + "Configure verified email retrieval.");
-                return;
-            }
+        }
+
+        // GitHub email is retrieved by CustomOAuth2UserService.
+        if ("github".equals(registrationId)
+                && (email == null || email.isBlank())) {
+
+            response.sendError(
+                    HttpServletResponse.SC_UNAUTHORIZED,
+                    "GitHub did not provide a verified email");
+            return;
+        }
+
+        if (!"google".equals(registrationId)
+                && !"github".equals(registrationId)) {
+
+            response.sendError(
+                    HttpServletResponse.SC_UNAUTHORIZED,
+                    "Unsupported OAuth2 provider");
+            return;
         }
 
         LoginResponse tokens =
