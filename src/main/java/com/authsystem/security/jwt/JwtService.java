@@ -27,15 +27,14 @@ public class JwtService {
 
     // Generate Access Token (15 minutes)
     public String generateToken(String email) {
-        long expirationTime = 15 * 60 * 1000;
+        long expirationTime = 15 * 60 * 1000L;
 
         return Jwts.builder()
                 .subject(email)
                 .claim("tokenType", "access")
                 .issuedAt(new Date())
                 .expiration(new Date(
-                        System.currentTimeMillis() + expirationTime
-                ))
+                        System.currentTimeMillis() + expirationTime))
                 .signWith(getSigningKey(), Jwts.SIG.HS512)
                 .compact();
     }
@@ -50,15 +49,14 @@ public class JwtService {
                 .claim("tokenType", "refresh")
                 .issuedAt(new Date())
                 .expiration(new Date(
-                        System.currentTimeMillis() + expirationTime
-                ))
+                        System.currentTimeMillis() + expirationTime))
                 .signWith(getSigningKey(), Jwts.SIG.HS512)
                 .compact();
     }
 
     // Generate Password Reset Token (10 minutes)
     public String generatePasswordResetToken(String email) {
-        long expirationTime = 10 * 60 * 1000;
+        long expirationTime = 10 * 60 * 1000L;
 
         return Jwts.builder()
                 .id(UUID.randomUUID().toString())
@@ -66,13 +64,12 @@ public class JwtService {
                 .claim("tokenType", "password_reset")
                 .issuedAt(new Date())
                 .expiration(new Date(
-                        System.currentTimeMillis() + expirationTime
-                ))
+                        System.currentTimeMillis() + expirationTime))
                 .signWith(getSigningKey(), Jwts.SIG.HS512)
                 .compact();
     }
 
-    // Extract all claims after verifying the token
+    // Extract all claims after verifying the signature and expiration
     public Claims extractAllClaims(String token) {
         return Jwts.parser()
                 .verifyWith(getSigningKey())
@@ -96,11 +93,20 @@ public class JwtService {
         return extractAllClaims(token).getExpiration();
     }
 
-    // Validate token and match email
+    // Validate an access token and match its email
     public boolean isTokenValid(String token, String email) {
-        Claims claims = extractAllClaims(token);
+        try {
+            Claims claims = extractAllClaims(token);
 
-        return email.equals(claims.getSubject())
-                && claims.getExpiration().after(new Date());
+            return email != null
+                    && email.equals(claims.getSubject())
+                    && "access".equals(
+                            claims.get("tokenType", String.class))
+                    && claims.getExpiration() != null
+                    && claims.getExpiration().after(new Date());
+
+        } catch (Exception ex) {
+            return false;
+        }
     }
 }

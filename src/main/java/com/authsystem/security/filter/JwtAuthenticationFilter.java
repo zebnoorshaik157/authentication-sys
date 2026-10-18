@@ -60,14 +60,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
         String token = null;
 
-        // First, check the Authorization header.
+        // Prefer the Authorization header.
         String authHeader =
                 request.getHeader(HttpHeaders.AUTHORIZATION);
 
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
             token = authHeader.substring(7);
         } else {
-            // If there is no Bearer token, check the accessToken cookie.
+            // Fall back to the accessToken cookie.
             Cookie[] cookies = request.getCookies();
 
             if (cookies != null) {
@@ -80,7 +80,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             }
         }
 
-        // No token: let Spring Security decide whether authentication is required.
+        // Let Spring Security handle requests without a token.
         if (token == null || token.isBlank()) {
             filterChain.doFilter(request, response);
             return;
@@ -88,17 +88,17 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
         try {
             Claims claims = jwtService.extractAllClaims(token);
+            String email = claims.getSubject();
 
-            String tokenType = claims.get("tokenType", String.class);
-
-            if (!"access".equals(tokenType)) {
+            // Validate signature, expiration, email and access-token type.
+            if (email == null || email.isBlank()
+                    || !jwtService.isTokenValid(token, email)) {
+                SecurityContextHolder.clearContext();
                 response.sendError(
                         HttpServletResponse.SC_UNAUTHORIZED,
-                        "Invalid access token");
+                        "Invalid or expired access token");
                 return;
             }
-
-            String email = claims.getSubject();
 
             if (SecurityContextHolder.getContext().getAuthentication() == null) {
 
@@ -106,6 +106,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                         .orElse(null);
 
                 if (user == null || user.getRole() == null) {
+                    SecurityContextHolder.clearContext();
                     response.sendError(
                             HttpServletResponse.SC_UNAUTHORIZED,
                             "User not found or role not assigned");
