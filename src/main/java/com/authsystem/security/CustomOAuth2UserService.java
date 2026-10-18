@@ -5,9 +5,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.client.userinfo.DefaultOAuth2UserService;
 import org.springframework.security.oauth2.client.userinfo.OAuth2UserRequest;
 import org.springframework.security.oauth2.client.userinfo.OAuth2UserService;
@@ -17,6 +17,7 @@ import org.springframework.security.oauth2.core.user.DefaultOAuth2User;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
 
 @Service
 public class CustomOAuth2UserService
@@ -40,10 +41,15 @@ public class CustomOAuth2UserService
                 new HashMap<>(oauthUser.getAttributes());
 
         if ("github".equals(registrationId)) {
-            String email = (String) attributes.get("email");
+            String email;
 
-            if (email == null || email.isBlank()) {
+            try {
+                // Always fetch an email that GitHub marks as verified.
                 email = fetchVerifiedGitHubEmail(userRequest);
+            } catch (RestClientException ex) {
+                throw new OAuth2AuthenticationException(
+                        new OAuth2Error("github_email_lookup_failed"),
+                        "Unable to retrieve a verified GitHub email");
             }
 
             if (email == null || email.isBlank()) {
@@ -56,6 +62,7 @@ public class CustomOAuth2UserService
             attributes.put("email_verified", true);
 
             String name = (String) attributes.get("name");
+
             if (name == null || name.isBlank()) {
                 attributes.put("name", attributes.get("login"));
             }
@@ -86,9 +93,8 @@ public class CustomOAuth2UserService
                 .header("X-GitHub-Api-Version", "2022-11-28")
                 .accept(MediaType.APPLICATION_JSON)
                 .retrieve()
-                .body(
-                        new org.springframework.core.ParameterizedTypeReference<
-                                List<Map<String, Object>>>() {});
+                .body(new ParameterizedTypeReference<
+                        List<Map<String, Object>>>() {});
 
         if (emails == null) {
             return null;
@@ -98,14 +104,23 @@ public class CustomOAuth2UserService
         for (Map<String, Object> item : emails) {
             if (Boolean.TRUE.equals(item.get("primary"))
                     && Boolean.TRUE.equals(item.get("verified"))) {
-                return (String) item.get("email");
+
+                Object email = item.get("email");
+
+                if (email instanceof String value && !value.isBlank()) {
+                    return value;
+                }
             }
         }
 
-        // Otherwise use another verified email.
+        // Otherwise, use another verified email.
         for (Map<String, Object> item : emails) {
             if (Boolean.TRUE.equals(item.get("verified"))) {
-                return (String) item.get("email");
+                Object email = item.get("email");
+
+                if (email instanceof String value && !value.isBlank()) {
+                    return value;
+                }
             }
         }
 
