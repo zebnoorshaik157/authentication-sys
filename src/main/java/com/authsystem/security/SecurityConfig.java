@@ -79,6 +79,7 @@ public class SecurityConfig {
             )
 
             .authorizeHttpRequests(auth -> auth
+
                 .requestMatchers(
                     HttpMethod.OPTIONS, "/**"
                 ).permitAll()
@@ -95,7 +96,12 @@ public class SecurityConfig {
                     "/login/oauth2/**",
                     "/api/auth/forgot-password",
                     "/api/auth/verify-otp",
-                    "/api/auth/reset-password"
+                    "/api/auth/reset-password",
+
+                    // Swagger and OpenAPI documentation
+                    "/swagger-ui/**",
+                    "/v3/api-docs/**",
+                    "/swagger-ui.html"
                 ).permitAll()
 
                 .requestMatchers("/admin/**")
