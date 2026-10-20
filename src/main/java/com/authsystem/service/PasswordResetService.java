@@ -152,9 +152,9 @@ public class PasswordResetService {
         log.info("OTP verification: user found, email={}",
                 user.getEmail());
 
-        // Find unused OTP records for this exact user.
+        // Retrieve unused OTPs using a pessimistic write lock.
         List<PasswordResetOtp> activeOtps =
-                otpRepository.findByUserAndUsedFalse(user);
+                otpRepository.findUnusedOtpsForUpdate(user);
 
         log.info(
                 "Found {} unused OTP record(s) for user id={}",

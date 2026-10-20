@@ -6,7 +6,6 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import java.time.Instant;
-import java.util.Date;
 import java.util.List;
 import java.util.Optional;
 
@@ -131,13 +130,14 @@ class PasswordResetServiceTest {
                         user.getEmail(), "123456"));
 
         assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());
+        verify(otpRepository, never()).findUnusedOtpsForUpdate(any());
     }
 
     @Test
     void verifyOtpShouldRejectWhenNoActiveOtpExists() {
         when(userRepository.findByEmail(user.getEmail()))
                 .thenReturn(Optional.of(user));
-        when(otpRepository.findByUserAndUsedFalse(user))
+        when(otpRepository.findUnusedOtpsForUpdate(user))
                 .thenReturn(List.of());
 
         ResponseStatusException exception = assertThrows(
@@ -155,7 +155,7 @@ class PasswordResetServiceTest {
 
         when(userRepository.findByEmail(user.getEmail()))
                 .thenReturn(Optional.of(user));
-        when(otpRepository.findByUserAndUsedFalse(user))
+        when(otpRepository.findUnusedOtpsForUpdate(user))
                 .thenReturn(List.of(otp));
         when(passwordEncoder.matches("000000", "hashed-otp"))
                 .thenReturn(false);
@@ -178,7 +178,7 @@ class PasswordResetServiceTest {
 
         when(userRepository.findByEmail(user.getEmail()))
                 .thenReturn(Optional.of(user));
-        when(otpRepository.findByUserAndUsedFalse(user))
+        when(otpRepository.findUnusedOtpsForUpdate(user))
                 .thenReturn(List.of(otp));
         when(passwordEncoder.matches("000000", "hashed-otp"))
                 .thenReturn(false);
@@ -200,7 +200,7 @@ class PasswordResetServiceTest {
 
         when(userRepository.findByEmail(user.getEmail()))
                 .thenReturn(Optional.of(user));
-        when(otpRepository.findByUserAndUsedFalse(user))
+        when(otpRepository.findUnusedOtpsForUpdate(user))
                 .thenReturn(List.of(otp));
 
         assertThrows(
