@@ -33,21 +33,17 @@ public class UserService {
             RefreshTokenRepository refreshTokenRepository,
             PasswordEncoder passwordEncoder,
             JwtService jwtService) {
-
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
     }
 
-    // Register a user using email and password
     @Transactional
     public void registerUser(RegisterRequest request) {
-
         if (userRepository.findByEmail(request.getEmail()).isPresent()) {
             throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "Email already registered");
+                    HttpStatus.CONFLICT, "Email already registered");
         }
 
         User user = new User();
@@ -59,10 +55,8 @@ public class UserService {
         userRepository.save(user);
     }
 
-    // Login using email and password
     @Transactional
     public LoginResponse loginUser(LoginRequest request) {
-
         User user = userRepository.findByEmail(request.getEmail())
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.UNAUTHORIZED,
@@ -71,28 +65,26 @@ public class UserService {
         if (user.getPassword() == null
                 || !passwordEncoder.matches(
                         request.getPassword(), user.getPassword())) {
-
             throw new ResponseStatusException(
                     HttpStatus.UNAUTHORIZED,
                     "Invalid email or password");
         }
 
         String accessToken = jwtService.generateToken(user.getEmail());
-        String refreshToken = jwtService.generateRefreshToken(user.getEmail());
+        String refreshToken =
+                jwtService.generateRefreshToken(user.getEmail());
 
         saveRefreshToken(user, refreshToken);
 
         return new LoginResponse(accessToken, refreshToken);
     }
 
-    // Login or register a user authenticated through Google OAuth2
     @Transactional
     public LoginResponse loginOrRegisterOAuthUser(String email, String name) {
-
         if (email == null || email.isBlank()) {
             throw new ResponseStatusException(
                     HttpStatus.UNAUTHORIZED,
-                    "Google account email is missing");
+                    "OAuth account email is missing");
         }
 
         User user = userRepository.findByEmail(email)
@@ -103,63 +95,65 @@ public class UserService {
                             name == null || name.isBlank() ? email : name);
                     newUser.setPassword(null);
                     newUser.setRole("USER");
-
                     return userRepository.save(newUser);
                 });
 
         String accessToken = jwtService.generateToken(user.getEmail());
-        String refreshToken = jwtService.generateRefreshToken(user.getEmail());
+        String refreshToken =
+                jwtService.generateRefreshToken(user.getEmail());
 
         saveRefreshToken(user, refreshToken);
 
         return new LoginResponse(accessToken, refreshToken);
     }
 
-    // Validate and rotate refresh tokens
     @Transactional
     public LoginResponse refreshTokens(String refreshToken) {
-
         try {
             Claims claims = jwtService.extractAllClaims(refreshToken);
 
             if (!"refresh".equals(
                     claims.get("tokenType", String.class))) {
                 throw new ResponseStatusException(
-                        HttpStatus.UNAUTHORIZED,
-                        "Invalid refresh token");
+                        HttpStatus.UNAUTHORIZED, "Invalid refresh token");
             }
 
             String jti = claims.getId();
 
-            // Lock the active database row while this transaction runs
-            RefreshToken storedToken = refreshTokenRepository
-                    .findActiveTokenForUpdate(jti)
-                    .orElseThrow(() -> new ResponseStatusException(
-                            HttpStatus.UNAUTHORIZED,
-                            "Refresh token is invalid or revoked"));
+            if (jti == null || jti.isBlank()) {
+                throw new ResponseStatusException(
+                        HttpStatus.UNAUTHORIZED, "Invalid refresh token");
+            }
+
+            RefreshToken storedToken =
+                    refreshTokenRepository.findActiveTokenForUpdate(jti)
+                            .orElseThrow(() -> new ResponseStatusException(
+                                    HttpStatus.UNAUTHORIZED,
+                                    "Refresh token is invalid or revoked"));
 
             if (storedToken.getExpiresAt().isBefore(Instant.now())) {
                 storedToken.setRevoked(true);
 
                 throw new ResponseStatusException(
-                        HttpStatus.UNAUTHORIZED,
-                        "Refresh token expired");
+                        HttpStatus.UNAUTHORIZED, "Refresh token expired");
             }
 
             String email = claims.getSubject();
 
-            if (!storedToken.getUser().getEmail().equals(email)) {
+            if (email == null
+                    || !storedToken.getUser().getEmail().equals(email)) {
                 throw new ResponseStatusException(
-                        HttpStatus.UNAUTHORIZED,
-                        "Invalid refresh token");
+                        HttpStatus.UNAUTHORIZED, "Invalid refresh token");
             }
 
             User user = storedToken.getUser();
 
+            // Revoke the old token and rotate to a new token.
             storedToken.setRevoked(true);
 
             String newAccessToken = jwtService.generateToken(email);
-            String newRefreshToken = jwtService.generateRefreshToken(email);
+            String newRefreshToken =
+                    jwtService.generateRefreshToken(email);
 
             saveRefreshToken(user, newRefreshToken);
 
@@ -174,10 +168,9 @@ public class UserService {
         }
     }
 
-    // Store refresh token details in the database
     private void saveRefreshToken(User user, String refreshToken) {
-
         RefreshToken tokenEntity = new RefreshToken();
+
         tokenEntity.setUser(user);
         tokenEntity.setJti(jwtService.extractJti(refreshToken));
         tokenEntity.setExpiresAt(
@@ -187,32 +180,33 @@ public class UserService {
         refreshTokenRepository.save(tokenEntity);
     }
 
-    // Revoke a refresh token during logout
     @Transactional
     public void logout(String refreshToken) {
-
         try {
             Claims claims = jwtService.extractAllClaims(refreshToken);
 
             if (!"refresh".equals(
                     claims.get("tokenType", String.class))) {
                 throw new ResponseStatusException(
-                        HttpStatus.UNAUTHORIZED,
-                        "Invalid refresh token");
+                        HttpStatus.UNAUTHORIZED, "Invalid refresh token");
             }
 
             String jti = claims.getId();
 
-            RefreshToken storedToken = refreshTokenRepository
-                    .findByJtiAndRevokedFalse(jti)
-                    .orElseThrow(() -> new ResponseStatusException(
-                            HttpStatus.UNAUTHORIZED,
-                            "Refresh token is invalid or already revoked"));
+            if (jti == null || jti.isBlank()) {
+                throw new ResponseStatusException(
+                        HttpStatus.UNAUTHORIZED, "Invalid refresh token");
+            }
+
+            RefreshToken storedToken =
+                    refreshTokenRepository.findByJtiAndRevokedFalse(jti)
+                            .orElseThrow(() -> new ResponseStatusException(
+                                    HttpStatus.UNAUTHORIZED,
+                                    "Refresh token is invalid or already revoked"));
 
             if (storedToken.getExpiresAt().isBefore(Instant.now())) {
                 throw new ResponseStatusException(
-                        HttpStatus.UNAUTHORIZED,
-                        "Refresh token expired");
+                        HttpStatus.UNAUTHORIZED, "Refresh token expired");
             }
 
             storedToken.setRevoked(true);
