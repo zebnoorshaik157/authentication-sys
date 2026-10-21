@@ -1,0 +1,308 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Authentication System - OAuth Linking</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 24px;
+            background: #f5f7fb;
+            color: #222;
+        }
+
+        .container {
+            background: white;
+            padding: 28px;
+            border-radius: 12px;
+            box-shadow: 0 4px 18px rgba(0, 0, 0, 0.08);
+        }
+
+        h1 {
+            font-size: 25px;
+        }
+
+        p {
+            line-height: 1.5;
+        }
+
+        label {
+            display: block;
+            margin-top: 16px;
+            font-weight: bold;
+        }
+
+        input, button {
+            width: 100%;
+            padding: 12px;
+            margin-top: 8px;
+            border-radius: 6px;
+            font-size: 15px;
+        }
+
+        input {
+            border: 1px solid #ccc;
+        }
+
+        button {
+            border: none;
+            background: #2457c5;
+            color: white;
+            cursor: pointer;
+        }
+
+        button:disabled {
+            background: #999;
+            cursor: not-allowed;
+        }
+
+        .secondary {
+            background: #333;
+        }
+
+        #message {
+            margin-top: 20px;
+            padding: 12px;
+            background: #eef2ff;
+            border-radius: 6px;
+            overflow-wrap: anywhere;
+            white-space: pre-wrap;
+        }
+
+        hr {
+            margin: 24px 0;
+            border: none;
+            border-top: 1px solid #ddd;
+        }
+
+        .note {
+            font-size: 13px;
+            color: #555;
+        }
+    </style>
+</head>
+
+<body>
+<div class="container">
+    <h1>Authentication System</h1>
+    <h2>OAuth Account Linking</h2>
+
+    <p>
+        Sign in using your existing Authentication System account.
+        Then choose Google or GitHub to link that provider.
+    </p>
+
+    <form id="loginForm">
+        <label for="email">Email address</label>
+        <input
+            id="email"
+            type="email"
+            autocomplete="username"
+            required
+        >
+
+        <label for="password">Password</label>
+        <input
+            id="password"
+            type="password"
+            autocomplete="current-password"
+            required
+        >
+
+        <button id="loginButton" type="submit">
+            Sign In
+        </button>
+    </form>
+
+    <hr>
+
+    <h3>Link a provider</h3>
+
+    <button id="googleButton" type="button" disabled>
+        Link Google Account
+    </button>
+
+    <button
+        id="githubButton"
+        class="secondary"
+        type="button"
+        disabled
+    >
+        Link GitHub Account
+    </button>
+
+    <p id="message" role="status" aria-live="polite">
+        Please sign in first.
+    </p>
+
+    <p class="note">
+        Use your application's existing account password.
+        Never enter your Google or GitHub password on this page.
+    </p>
+</div>
+
+<script>
+    const loginForm = document.getElementById("loginForm");
+    const loginButton = document.getElementById("loginButton");
+    const googleButton = document.getElementById("googleButton");
+    const githubButton = document.getElementById("githubButton");
+    const message = document.getElementById("message");
+
+    function showMessage(text) {
+        message.textContent = text;
+    }
+
+    function setProviderButtons(enabled) {
+        googleButton.disabled = !enabled;
+        githubButton.disabled = !enabled;
+    }
+
+    function getCookie(name) {
+        const prefix = name + "=";
+
+        for (const item of document.cookie.split(";")) {
+            const cookie = item.trim();
+
+            if (cookie.startsWith(prefix)) {
+                return decodeURIComponent(
+                    cookie.substring(prefix.length)
+                );
+            }
+        }
+
+        return null;
+    }
+
+    async function login(email, password) {
+        const response = await fetch("/login", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                email: email,
+                password: password
+            })
+        });
+
+        const responseText = await response.text();
+
+        if (!response.ok) {
+            throw new Error(
+                "Login failed with HTTP " +
+                response.status + ": " + responseText
+            );
+        }
+    }
+
+    loginForm.addEventListener("submit", async function (event) {
+        event.preventDefault();
+
+        loginButton.disabled = true;
+        setProviderButtons(false);
+        showMessage("Signing in...");
+
+        try {
+            const email = document.getElementById("email").value;
+            const password = document.getElementById("password").value;
+
+            await login(email, password);
+
+            setProviderButtons(true);
+            showMessage(
+                "Login successful. You can now choose a provider."
+            );
+        } catch (error) {
+            showMessage(error.message);
+        } finally {
+            loginButton.disabled = false;
+        }
+    });
+
+    async function linkProvider(provider) {
+        setProviderButtons(false);
+        showMessage("Preparing secure account linking...");
+
+        try {
+            // Obtain the CSRF cookie from the application's endpoint.
+            const csrfResponse = await fetch("/csrf", {
+                method: "GET",
+                credentials: "same-origin"
+            });
+
+            if (!csrfResponse.ok) {
+                throw new Error(
+                    "CSRF initialization failed: HTTP " +
+                    csrfResponse.status
+                );
+            }
+
+            const csrfToken = getCookie("XSRF-TOKEN");
+
+            if (!csrfToken) {
+                throw new Error(
+                    "The XSRF-TOKEN cookie is missing. " +
+                    "Please check the /csrf endpoint."
+                );
+            }
+
+            // Start linking for the currently authenticated account.
+            const response = await fetch(
+                "/api/auth/oauth/link/" + provider,
+                {
+                    method: "POST",
+                    credentials: "same-origin",
+                    headers: {
+                        "X-XSRF-TOKEN": csrfToken
+                    }
+                }
+            );
+
+            const result = await response.json();
+
+            if (!response.ok) {
+                throw new Error(
+                    "Link request failed with HTTP " +
+                    response.status + ": " +
+                    (result.detail || result.message ||
+                     JSON.stringify(result))
+                );
+            }
+
+            if (!result.authorizationUrl) {
+                throw new Error(
+                    "The server did not return an authorization URL."
+                );
+            }
+
+            showMessage("Redirecting to " + provider + "...");
+
+            // Continue the OAuth flow in this same browser.
+            window.location.assign(result.authorizationUrl);
+
+        } catch (error) {
+            showMessage(error.message);
+            setProviderButtons(true);
+        }
+    }
+
+    googleButton.addEventListener("click", function () {
+        linkProvider("google");
+    });
+
+    githubButton.addEventListener("click", function () {
+        linkProvider("github");
+    });
+</script>
+</body>
+</html>

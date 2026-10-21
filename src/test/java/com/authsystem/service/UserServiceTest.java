@@ -1,38 +1,55 @@
 
 package com.authsystem.service;
 
-import com.authsystem.dto.LoginRequest;
-import com.authsystem.dto.LoginResponse;
-import com.authsystem.dto.RegisterRequest;
-import com.authsystem.entity.RefreshToken;
-import com.authsystem.entity.User;
-import com.authsystem.repository.RefreshTokenRepository;
-import com.authsystem.repository.UserRepository;
-import com.authsystem.security.jwt.JwtService;
+import java.time.Instant;
+import java.util.Date;
+import java.util.Optional;
 
-import io.jsonwebtoken.Claims;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.time.Instant;
-import java.util.Date;
-import java.util.Optional;
+import com.authsystem.dto.LoginRequest;
+import com.authsystem.dto.LoginResponse;
+import com.authsystem.dto.RegisterRequest;
+import com.authsystem.entity.OAuthAccount;
+import com.authsystem.entity.RefreshToken;
+import com.authsystem.entity.User;
+import com.authsystem.repository.OAuthAccountRepository;
+import com.authsystem.repository.RefreshTokenRepository;
+import com.authsystem.repository.UserRepository;
+import com.authsystem.security.jwt.JwtService;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
+import io.jsonwebtoken.Claims;
 
 @ExtendWith(MockitoExtension.class)
 class UserServiceTest {
 
     @Mock
     private UserRepository userRepository;
+
+    @Mock
+    private OAuthAccountRepository oauthAccountRepository;
 
     @Mock
     private PasswordEncoder passwordEncoder;
@@ -56,6 +73,17 @@ class UserServiceTest {
         user.setEmail("test@example.com");
         user.setPassword("encodedPassword");
         user.setRole("USER");
+    }
+
+    private void stubTokenCreation(String email) {
+        when(jwtService.generateToken(email))
+                .thenReturn("access-token");
+        when(jwtService.generateRefreshToken(email))
+                .thenReturn("refresh-token");
+        when(jwtService.extractJti("refresh-token"))
+                .thenReturn("refresh-jti");
+        when(jwtService.extractExpiration("refresh-token"))
+                .thenReturn(Date.from(Instant.now().plusSeconds(3600)));
     }
 
     @Test
@@ -105,14 +133,7 @@ class UserServiceTest {
                 .thenReturn(Optional.of(user));
         when(passwordEncoder.matches("password123", "encodedPassword"))
                 .thenReturn(true);
-        when(jwtService.generateToken("test@example.com"))
-                .thenReturn("access-token");
-        when(jwtService.generateRefreshToken("test@example.com"))
-                .thenReturn("refresh-token");
-        when(jwtService.extractJti("refresh-token"))
-                .thenReturn("refresh-jti");
-        when(jwtService.extractExpiration("refresh-token"))
-                .thenReturn(Date.from(Instant.now().plusSeconds(3600)));
+        stubTokenCreation("test@example.com");
 
         LoginResponse response = userService.loginUser(request);
 
@@ -158,6 +179,130 @@ class UserServiceTest {
     }
 
     @Test
+    void oauthLogin_shouldCreateUserAndIdentityForNewAccount() {
+        when(oauthAccountRepository
+                .findByProviderAndProviderUserId("google", "google-sub-123"))
+                .thenReturn(Optional.empty());
+        when(userRepository.findByEmail("new@example.com"))
+                .thenReturn(Optional.empty());
+        when(userRepository.save(any(User.class)))
+                .thenAnswer(invocation -> {
+                    User saved = invocation.getArgument(0);
+                    saved.setId(2L);
+                    return saved;
+                });
+        when(oauthAccountRepository.save(any(OAuthAccount.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        stubTokenCreation("new@example.com");
+
+        LoginResponse response = userService.loginOrRegisterOAuthUser(
+                "google",
+                "google-sub-123",
+                "new@example.com",
+                "New User");
+
+        assertEquals("access-token", response.getAccessToken());
+        assertEquals("refresh-token", response.getRefreshToken());
+
+        ArgumentCaptor<User> userCaptor =
+                ArgumentCaptor.forClass(User.class);
+        verify(userRepository).save(userCaptor.capture());
+
+        User savedUser = userCaptor.getValue();
+        assertEquals("new@example.com", savedUser.getEmail());
+        assertEquals("New User", savedUser.getName());
+        assertNull(savedUser.getPassword());
+        assertEquals("USER", savedUser.getRole());
+
+        ArgumentCaptor<OAuthAccount> accountCaptor =
+                ArgumentCaptor.forClass(OAuthAccount.class);
+        verify(oauthAccountRepository).save(accountCaptor.capture());
+
+        OAuthAccount savedAccount = accountCaptor.getValue();
+        assertEquals("google", savedAccount.getProvider());
+        assertEquals("google-sub-123", savedAccount.getProviderUserId());
+        assertSame(savedUser, savedAccount.getUser());
+
+        verify(refreshTokenRepository).save(any(RefreshToken.class));
+    }
+
+    @Test
+    void oauthLogin_shouldAuthenticateReturningProviderIdentity() {
+        OAuthAccount account = new OAuthAccount();
+        account.setProvider("google");
+        account.setProviderUserId("google-sub-123");
+        account.setUser(user);
+
+        when(oauthAccountRepository
+                .findByProviderAndProviderUserId("google", "google-sub-123"))
+                .thenReturn(Optional.of(account));
+
+        stubTokenCreation("test@example.com");
+
+        LoginResponse response = userService.loginOrRegisterOAuthUser(
+                "google",
+                "google-sub-123",
+                "test@example.com",
+                "Test User");
+
+        assertEquals("access-token", response.getAccessToken());
+        assertEquals("refresh-token", response.getRefreshToken());
+
+        verify(userRepository, never()).save(any(User.class));
+        verify(oauthAccountRepository, never()).save(any(OAuthAccount.class));
+        verify(refreshTokenRepository).save(any(RefreshToken.class));
+    }
+
+    @Test
+    void oauthLogin_shouldRejectEmailMatchingExistingPasswordAccount() {
+        when(oauthAccountRepository
+                .findByProviderAndProviderUserId("google", "different-sub"))
+                .thenReturn(Optional.empty());
+        when(userRepository.findByEmail("test@example.com"))
+                .thenReturn(Optional.of(user));
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> userService.loginOrRegisterOAuthUser(
+                        "google",
+                        "different-sub",
+                        "test@example.com",
+                        "Test User"));
+
+        assertEquals(HttpStatus.CONFLICT, exception.getStatusCode());
+
+        verify(userRepository, never()).save(any(User.class));
+        verify(oauthAccountRepository, never()).save(any(OAuthAccount.class));
+        verify(jwtService, never()).generateToken(anyString());
+    }
+
+    @Test
+    void oauthLogin_shouldRejectMissingProviderIdentity() {
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> userService.loginOrRegisterOAuthUser(
+                        "google", " ", "new@example.com", "New User"));
+
+        assertEquals(HttpStatus.UNAUTHORIZED, exception.getStatusCode());
+        verify(userRepository, never()).save(any(User.class));
+    }
+
+    @Test
+    void oauthLogin_shouldRejectUnsupportedProvider() {
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> userService.loginOrRegisterOAuthUser(
+                        "facebook",
+                        "facebook-123",
+                        "new@example.com",
+                        "New User"));
+
+        assertEquals(HttpStatus.UNAUTHORIZED, exception.getStatusCode());
+        verify(userRepository, never()).save(any(User.class));
+    }
+
+    @Test
     void refreshTokens_shouldRotateTokenWhenRefreshTokenIsValid() {
         String oldRefreshToken = "old-refresh-token";
 
@@ -199,7 +344,6 @@ class UserServiceTest {
     @Test
     void refreshTokens_shouldRejectRevokedOrMissingToken() {
         String refreshToken = "invalid-refresh-token";
-
         Claims claims = mock(Claims.class);
 
         when(jwtService.extractAllClaims(refreshToken))
@@ -220,7 +364,6 @@ class UserServiceTest {
     @Test
     void refreshTokens_shouldRejectAccessToken() {
         String accessToken = "access-token";
-
         Claims claims = mock(Claims.class);
 
         when(jwtService.extractAllClaims(accessToken))
@@ -300,7 +443,6 @@ class UserServiceTest {
     @Test
     void logout_shouldRejectAccessToken() {
         String accessToken = "access-token";
-
         Claims claims = mock(Claims.class);
 
         when(jwtService.extractAllClaims(accessToken))
@@ -323,7 +465,6 @@ class UserServiceTest {
     @Test
     void logout_shouldRejectMissingOrRevokedRefreshToken() {
         String refreshToken = "revoked-refresh-token";
-
         Claims claims = mock(Claims.class);
 
         when(jwtService.extractAllClaims(refreshToken))
@@ -370,8 +511,8 @@ class UserServiceTest {
                 () -> userService.logout(refreshToken));
 
         assertEquals(HttpStatus.UNAUTHORIZED, exception.getStatusCode());
-
         assertFalse(storedToken.isRevoked());
+
         verify(refreshTokenRepository, never())
                 .save(any(RefreshToken.class));
     }

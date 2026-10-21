@@ -2,20 +2,26 @@
 package com.authsystem.security;
 
 import java.io.IOException;
+import java.util.Locale;
 
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.security.web.authentication.AuthenticationSuccessHandler;
 import org.springframework.stereotype.Component;
+import org.springframework.web.server.ResponseStatusException;
 
+import com.authsystem.controller.OAuthAccountLinkController;
 import com.authsystem.dto.LoginResponse;
 import com.authsystem.service.UserService;
 
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpSession;
 
 @Component
 public class OAuth2LoginSuccessHandler
@@ -40,8 +46,9 @@ public class OAuth2LoginSuccessHandler
             throws IOException, ServletException {
 
         if (!(authentication instanceof OAuth2AuthenticationToken oauthToken)) {
-            response.sendError(
-                    HttpServletResponse.SC_UNAUTHORIZED,
+            sendError(
+                    response,
+                    HttpStatus.UNAUTHORIZED,
                     "Invalid OAuth2 authentication");
             return;
         }
@@ -49,54 +56,142 @@ public class OAuth2LoginSuccessHandler
         OAuth2User oauthUser =
                 (OAuth2User) oauthToken.getPrincipal();
 
-        String registrationId =
-                oauthToken.getAuthorizedClientRegistrationId();
+        String provider = oauthToken
+                .getAuthorizedClientRegistrationId()
+                .toLowerCase(Locale.ROOT);
 
         String email = oauthUser.getAttribute("email");
         String name = oauthUser.getAttribute("name");
+        String providerUserId;
 
-        // Log only safe diagnostic information.
-        System.out.println("OAuth provider: " + registrationId);
-        System.out.println(
-                "OAuth email found: "
-                        + (email != null && !email.isBlank()));
+        if ("google".equals(provider)) {
 
-        // Google must provide a verified email.
-        if ("google".equals(registrationId)) {
             Boolean emailVerified =
                     oauthUser.getAttribute("email_verified");
 
             if (email == null || email.isBlank()
                     || !Boolean.TRUE.equals(emailVerified)) {
-
-                response.sendError(
-                        HttpServletResponse.SC_UNAUTHORIZED,
+                sendError(
+                        response,
+                        HttpStatus.UNAUTHORIZED,
                         "Google account email is missing or not verified");
                 return;
             }
-        }
 
-        // GitHub email is retrieved by CustomOAuth2UserService.
-        if ("github".equals(registrationId)
-                && (email == null || email.isBlank())) {
+            providerUserId = oauthUser.getAttribute("sub");
 
-            response.sendError(
-                    HttpServletResponse.SC_UNAUTHORIZED,
-                    "GitHub did not provide a verified email");
-            return;
-        }
+        } else if ("github".equals(provider)) {
 
-        if (!"google".equals(registrationId)
-                && !"github".equals(registrationId)) {
+            if (email == null || email.isBlank()
+                    || !Boolean.TRUE.equals(
+                            oauthUser.getAttribute("email_verified"))) {
+                sendError(
+                        response,
+                        HttpStatus.UNAUTHORIZED,
+                        "GitHub did not provide a verified email");
+                return;
+            }
 
-            response.sendError(
-                    HttpServletResponse.SC_UNAUTHORIZED,
+            Object githubId = oauthUser.getAttribute("id");
+
+            providerUserId = githubId == null
+                    ? null
+                    : String.valueOf(githubId);
+
+        } else {
+            sendError(
+                    response,
+                    HttpStatus.UNAUTHORIZED,
                     "Unsupported OAuth2 provider");
             return;
         }
 
-        LoginResponse tokens =
-                userService.loginOrRegisterOAuthUser(email, name);
+        if (providerUserId == null || providerUserId.isBlank()) {
+            sendError(
+                    response,
+                    HttpStatus.UNAUTHORIZED,
+                    "OAuth provider identity is missing");
+            return;
+        }
+
+        // Check whether this callback belongs to an account-linking attempt.
+        HttpSession session = request.getSession(false);
+
+        String linkingEmail = null;
+        boolean linkingAttempt = false;
+
+        if (session != null) {
+            Object savedEmail = session.getAttribute(
+                    OAuthAccountLinkController.TARGET_EMAIL);
+
+            Object savedState = session.getAttribute(
+                    OAuthAccountLinkController.TARGET_STATE);
+
+            String callbackState = request.getParameter("state");
+
+            if (savedEmail instanceof String
+                    && savedState instanceof String
+                    && callbackState != null
+                    && callbackState.equals(savedState)) {
+
+                linkingEmail = (String) savedEmail;
+                linkingAttempt = true;
+            }
+
+            // Always consume the stored linking intent once this callback
+            // has been handled, so it cannot be reused later.
+            session.removeAttribute(
+                    OAuthAccountLinkController.TARGET_EMAIL);
+
+            session.removeAttribute(
+                    OAuthAccountLinkController.TARGET_STATE);
+        }
+
+        if (linkingAttempt) {
+            try {
+                userService.linkOAuthAccount(
+                        linkingEmail,
+                        provider,
+                        providerUserId);
+
+                response.setStatus(HttpServletResponse.SC_OK);
+                response.setContentType("text/plain;charset=UTF-8");
+                response.getWriter().write(
+                        "OAuth account linked successfully. Provider: "
+                                + provider);
+
+            } catch (ResponseStatusException ex) {
+                sendError(
+                        response,
+                        ex.getStatusCode(),
+                        ex.getReason() == null
+                                ? "OAuth account linking was rejected"
+                                : ex.getReason());
+            }
+
+            // Do not create login cookies during account linking.
+            return;
+        }
+
+        // Normal OAuth login behavior remains unchanged.
+        final LoginResponse tokens;
+
+        try {
+            tokens = userService.loginOrRegisterOAuthUser(
+                    provider,
+                    providerUserId,
+                    email,
+                    name);
+
+        } catch (ResponseStatusException ex) {
+            sendError(
+                    response,
+                    ex.getStatusCode(),
+                    ex.getReason() == null
+                            ? "OAuth login was rejected"
+                            : ex.getReason());
+            return;
+        }
 
         HttpHeaders headers = new HttpHeaders();
 
@@ -111,10 +206,23 @@ public class OAuth2LoginSuccessHandler
                         response.addHeader(headerName, value)));
 
         response.setStatus(HttpServletResponse.SC_OK);
-        response.setContentType("text/plain");
+        response.setContentType("text/plain;charset=UTF-8");
         response.getWriter().write(
-                "github".equals(registrationId)
-                        ? "GitHub login successful"
-                        : "Google login successful");
+                "OAuth login successful. Provider: " + provider);
+    }
+
+    private void sendError(
+            HttpServletResponse response,
+            HttpStatusCode status,
+            String message) throws IOException {
+
+        if (response.isCommitted()) {
+            return;
+        }
+
+        response.resetBuffer();
+        response.setStatus(status.value());
+        response.setContentType("text/plain;charset=UTF-8");
+        response.getWriter().write(message);
     }
 }
