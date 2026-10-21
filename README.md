@@ -870,8 +870,3 @@ It is intended to demonstrate more than basic CRUD operations: the project combi
 - GitHub: [zebnoorshaik157](https://github.com/zebnoorshaik157)
 - Project repository: [authentication-sys](https://github.com/zebnoorshaik157/authentication-sys)
 
----
-
-## License
-
-Add a license file and update this section if you decide to distribute the project under a specific open-source license.
